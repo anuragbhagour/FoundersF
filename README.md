@@ -282,15 +282,3 @@ Common helpers (e.g., formatting dates, URLs, string transformations).
 
 ### src/components/NavLink.tsx  
 Custom wrapper for React Router’s `NavLink` to apply active styles.
-
----
-
-# Project Context
-
-### PROJECT_CONTEXT.txt  
-Narrative of project goals, scope, data sources, roadmap, security considerations, and team focus. Guides future development and feature prioritization.
-
----
-
-
-This documentation should guide you through each code file’s purpose, how they interconnect, and where to extend or modify functionality.
