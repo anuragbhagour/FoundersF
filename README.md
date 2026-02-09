@@ -292,23 +292,5 @@ Narrative of project goals, scope, data sources, roadmap, security consideration
 
 ---
 
-**Relationships & Flow**  
-Mermaid C4 container diagram illustrates high-level architecture:
-
-```mermaid
-C4Context
-  title System Context
-  Person(user, "Entrepreneur", "Uses web app to find schemes and generate roadmaps")
-  System(frontend, "Frontend SPA", "React + Vite", "Public and protected UI")
-  System(backend, "API Server", "Flask & FastAPI", "Handles auth, data, AI requests")
-  System(ai, "AI Backend", "FastAPI", "RAG pipeline and roadmap generation")
-  SystemDb(pg, "PostgreSQL", "psycopg2", "User and form data")
-  SystemDb(mongo, "MongoDB Atlas", "pymongo", "Vector store for embeddings")
-  user --> frontend : Uses
-  frontend --> backend : REST API (signup, login, data)
-  frontend --> ai : REST API (/rag, /roadmap)
-  backend --> pg : Read/Write user & roadmap tables
-  ai --> mongo : Vector search queries
-```
 
 This documentation should guide you through each code file’s purpose, how they interconnect, and where to extend or modify functionality.
