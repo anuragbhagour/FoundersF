@@ -9,25 +9,30 @@ import datetime
 import requests
 import json
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 from urllib.parse import quote
 
-#for loading .env file
+
 load_dotenv()
 
 app = Flask(__name__)
-#for cross origin communication 
+
 CORS(app)  
 bcrypt = Bcrypt(app)
-AI_Backend_URL = "http://127.0.0.1:8001"
+AI_Backend_URL = os.getenv("AI_BACKEND_URL", "http://localhost:7000")
 
 # Load schemes at startup
 def load_schemes():
-    """Load schemes from the JSON file"""
+    """Load schemes from the JSON file (must be in the same directory as main.py)."""
     try:
-        schemes_path = os.path.join(os.path.dirname(__file__), '..', 'ai-backend', 'schemes_structured_documents.json')
+        schemes_path = os.path.join(os.path.dirname(__file__), 'schemes_structured_documents.json')
         if os.path.exists(schemes_path):
             with open(schemes_path, 'r') as f:
                 return json.load(f)
+        else:
+            print("[WARN] schemes_structured_documents.json not found — scheme lookup disabled.")
     except Exception as e:
         print(f"Error loading schemes: {e}")
     return []
@@ -77,118 +82,17 @@ def get_user_from_token():
         return None
 
 
-@app.route("/roadmap_genration_form" , methods = ["POST"])
-def roadmap_genration_form():
-    data = request.json 
-    user_id = data["user_id"]
-    startup_idea = data["startup_idea"]
-    age = data["age"]
-    gender = data["gender"]
-    category = data["category"]
-    location = data["location"]
-    funding_status = data["funding_status"]
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO startup_forms
-        (user_id, startup_idea, age, gender, category, location, funding_status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (
-        user_id,
-        startup_idea,
-        age,
-        gender,
-        category,
-        location,
-        funding_status
-    ))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return ({"message" : "startup form sunmitted successfully"}), 201
-
-@app.route("/test",methods = ["GET"])
-def testapi():
-    data= requests.get("https://aibackend.thankfulriver-53eeedbe.southeastasia.azurecontainerapps.io" + "/test")
-    return jsonify(data.json()), 200
-
-#signup api where all the three variables fetching data from the data which is requested by the frontend and simply saving the data into the database.
-@app.route("/signup", methods=["POST"])
-def signup():
-    data = request.json
-    name = data["name"]
-    email = data["email"]
-    password = data["password"]
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    cur.execute("SELECT id FROM users WHERE email=%s", (email,))
-    if cur.fetchone():
-        return jsonify({"message": "User already exists"}), 400
-
-    hashed_pw = bcrypt.generate_password_hash(password).decode("utf-8")
-
-    cur.execute(
-        "INSERT INTO users (name, email, password) VALUES (%s, %s, %s)",
-        (name, email, hashed_pw)
-    )
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
-    return jsonify({"message": "Signup successful"}), 201
-
-
-#here the login method is created which will fetch the email and password 
-#and then check the database for the same and if they match it will allow you otherwise give you error
-
-
-@app.route("/login", methods=["POST"])
-def login():
-    data = request.json
-    email = data["email"]
-    password = data["password"]
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    cur.execute("SELECT id, password FROM users WHERE email=%s", (email,))
-    user = cur.fetchone()
-
-    cur.close()
-    conn.close()
-
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-
-    if bcrypt.check_password_hash(user[1], password):
-        token = jwt.encode({
-            "user_id": user[0],
-            "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-        }, SECRET_KEY, algorithm="HS256")
-
-        return jsonify({
-            "message": "Login successful",
-            "token": token
-        }), 200
-
-    return jsonify({"message": "Invalid password"}), 401
-
-
-@app.route("/chat_with_roadmap", methods=["POST"])
-def chat_simple():
-    data = request.json
-    message = data["message"]
-    context = data.get("context", "")
+def build_chat_context(user_id, message):
+    """
+    Build an enriched prompt with user context, roadmap, and relevant schemes.
     
-    # Get user ID from token
-    user_id = get_user_from_token()
+    Args:
+        user_id: The user's ID (from JWT token)
+        message: The user's question/message
     
-    # Initialize full context
+    Returns:
+        A comprehensive prompt string with all context included
+    """
     startup_idea = ""
     user_profile = ""
     roadmap_details = ""
@@ -282,13 +186,281 @@ When answering questions, directly reference:
 User Question: {message}
 
 Provide a focused, practical answer that directly addresses their question using the context provided."""
+    
+    return final_prompt
 
-    encoded = quote(final_prompt)
 
-    url = "https://aibackend.thankfulriver-53eeedbe.southeastasia.azurecontainerapps.io/rag/" + encoded
+@app.route("/roadmap_genration_form" , methods = ["POST"])
+def roadmap_genration_form():
+    data = request.json 
+    user_id = data["user_id"]
+    startup_idea = data["startup_idea"]
+    age = data["age"]
+    gender = data["gender"]
+    category = data["category"]
+    location = data["location"]
+    funding_status = data["funding_status"]
 
-    ai = requests.get(url, timeout=60)
+    conn = get_db_connection()
+    cur = conn.cursor()
 
+    cur.execute("""
+        INSERT INTO startup_forms
+        (user_id, startup_idea, age, gender, category, location, funding_status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (
+        user_id,
+        startup_idea,
+        age,
+        gender,
+        category,
+        location,
+        funding_status
+    ))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return ({"message" : "startup form sunmitted successfully"}), 201
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Liveness endpoint for Azure Container Apps health probes."""
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/test", methods=["GET"])
+def testapi():
+    data = requests.get(AI_Backend_URL + "/test")
+    return jsonify(data.json()), 200
+
+
+@app.route("/signup", methods=["POST"])
+def signup():
+    data = request.json
+    name = data["name"]
+    email = data["email"]
+    password = data["password"]
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+    if cur.fetchone():
+        return jsonify({"message": "User already exists"}), 400
+
+    hashed_pw = bcrypt.generate_password_hash(password).decode("utf-8")
+
+    cur.execute(
+        "INSERT INTO users (name, email, password) VALUES (%s, %s, %s)",
+        (name, email, hashed_pw)
+    )
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return jsonify({"message": "Signup successful"}), 201
+
+
+
+
+
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.json
+    email = data["email"]
+    password = data["password"]
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id, password FROM users WHERE email=%s", (email,))
+    user = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    if bcrypt.check_password_hash(user[1], password):
+        token = jwt.encode({
+            "user_id": user[0],
+            "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+        }, SECRET_KEY, algorithm="HS256")
+
+        return jsonify({
+            "message": "Login successful",
+            "token": token
+        }), 200
+
+    return jsonify({"message": "Invalid password"}), 401
+
+
+
+
+@app.route("/chat/stream", methods=["POST"])
+def chat_stream():
+    """
+    Chat endpoint that proxies to the AI backend and returns the complete response.
+    
+    Sends ONLY the raw user message and user_id to the AI backend.
+    The AI agent uses tools to fetch profile/roadmap/scheme context when needed,
+    keeping conversation history clean (no system prompt pollution).
+    
+    Request:
+        {
+            "message": "user's question or message",
+            "context": "optional additional context"
+        }
+    
+    Response:
+        {
+            "response": "complete AI response text"
+        }
+    
+    Requires Authorization header with valid JWT token.
+    """
+    try:
+        data = request.json
+        message = data.get("message", "")
+        
+        if not message:
+            return jsonify({"error": "Message is required"}), 400
+        
+        # Get user ID from token
+        user_id = get_user_from_token()
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        # Call AI backend's /chat/stream endpoint
+        ai_backend_url = f"{AI_Backend_URL}/chat/stream"
+        
+        # Send ONLY the raw user message and user_id — NOT the enriched system prompt.
+        # The AI agent has tools (user_profile_fetcher, get_user_roadmap,
+        # fetch_schemes_from_vectordb) that it uses to fetch context when needed.
+        payload = {
+            "thread_id": str(user_id),
+            "query": message,
+            "user_id": str(user_id)
+        }
+        
+        print(f"[CHAT/STREAM] user_id={user_id} | Proxying to AI backend: {ai_backend_url}")
+        
+        # Get complete response from AI backend
+        # timeout=(connect, read): 10s to connect, 5min to wait for AI response
+        response = requests.post(
+            ai_backend_url,
+            json=payload,
+            timeout=(10, 300)
+        )
+        response.raise_for_status()
+        
+        # Return the complete response as JSON
+        ai_response = response.json()
+        
+        return jsonify({
+            "response": ai_response.get("response", ""),
+            "thread_id": str(user_id)
+        }), 200
+        
+    except requests.exceptions.ReadTimeout:
+        print(f"[CHAT/STREAM] AI backend timed out for user_id={get_user_from_token()}")
+        return jsonify({
+            "error": "The AI is taking too long to respond. This can happen with complex questions. Please try again with a simpler query, or try again in a moment."
+        }), 504
+    except requests.exceptions.ConnectionError:
+        print(f"[CHAT/STREAM] Cannot reach AI backend at {AI_Backend_URL}")
+        return jsonify({
+            "error": "The AI service is currently unavailable. Please try again in a few moments."
+        }), 502
+    except requests.exceptions.RequestException as e:
+        print(f"[CHAT/STREAM] Error calling AI backend: {e}")
+        return jsonify({"error": "Something went wrong while processing your request. Please try again."}), 500
+    except Exception as e:
+        print(f"[CHAT/STREAM] Unexpected error: {e}")
+        return jsonify({"error": "An unexpected error occurred. Please try again."}), 500
+
+
+@app.route("/chat/history", methods=["GET"])
+def get_chat_history():
+    """
+    Retrieve conversation history for the current user.
+    
+    This endpoint fetches the message history from the AI backend's PostgreSQL checkpointer,
+    allowing the frontend to restore the chat after a page reload.
+    
+    Returns:
+        {
+            "messages": [
+                {"role": "user", "content": "..."},
+                {"role": "assistant", "content": "..."},
+                ...
+            ],
+            "thread_id": "user_123"
+        }
+    
+    Requires Authorization header with valid JWT token.
+    """
+    try:
+        # Get user ID from token
+        user_id = get_user_from_token()
+        if not user_id:
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        # Build thread_id (must match what's used in /chat/stream)
+        thread_id = str(user_id)
+        
+        # Call AI backend to get message history
+        ai_backend_url = f"{AI_Backend_URL}/message-history/{thread_id}"
+        
+        print(f"[HISTORY] user_id={user_id} | Fetching from: {ai_backend_url}")
+        
+        response = requests.get(ai_backend_url, timeout=10)
+        response.raise_for_status()
+        
+        history_data = response.json()
+        
+        # Return to frontend
+        return jsonify({
+            "messages": history_data.get("messages", []),
+            "thread_id": thread_id,
+            "found": history_data.get("found", False)
+        }), 200
+        
+    except requests.exceptions.RequestException as e:
+        print(f"[HISTORY] Error calling AI backend: {e}")
+        return jsonify({
+            "error": str(e),
+            "messages": [],
+            "found": False
+        }), 500
+    except Exception as e:
+        print(f"[HISTORY] Unexpected error: {e}")
+        return jsonify({
+            "error": str(e),
+            "messages": [],
+            "found": False
+        }), 500
+
+
+@app.route("/chat_with_roadmap", methods=["POST"])
+def chat_simple():
+    """
+    Legacy chat endpoint — now routes to the local AI backend /roadmap/ endpoint.
+    Prefer /chat/stream for new implementations.
+    """
+    data = request.json
+    message = data["message"]
+
+    user_id = get_user_from_token()
+    final_prompt = build_chat_context(user_id, message)
+
+    ai = requests.get(
+        f"{AI_Backend_URL}/roadmap/",
+        params={"query": final_prompt},
+        timeout=60,
+    )
     return jsonify(ai.json())
 
 @app.route("/my-roadmap", methods=["GET"])
@@ -320,30 +492,85 @@ def my_roadmap():
         "roadmap": row[1]
     })
 
-@app.route("/generate_roadmap", methods=["POST"])
-def generate_roadmap():
-    data = request.json
-    # user_id = data.get("user_id", 1)
-    user_id = get_user_from_token()
-    print("USER_ID:", user_id)
-    if not user_id:
-         return jsonify({"error": "Unauthorized"}), 401
-    query = data["query"]
-    startup_idea = data.get("startup_idea", "")
+def _parse_roadmap_text(text):
+    """
+    Safely parse the roadmap response from the AI backend.
 
-    ai = requests.get(
-        "https://aibackend.thankfulriver-53eeedbe.southeastasia.azurecontainerapps.io/roadmap/",
-        params={"query": query},
-        timeout=60
-    )
+    The AI backend may return `response` as:
+      - A dict  → already parsed JSON; use directly.
+      - A string → may be wrapped in ```json ... ``` fences; strip and parse.
+      - None     → treat as an error.
 
-    raw = ai.json()
-    text = raw["response"]
+    Returns the parsed roadmap list/dict, or raises ValueError on failure.
+    """
+    logger.debug("[parse_roadmap] type(text)=%s", type(text).__name__)
 
+    if text is None:
+        raise ValueError("AI backend returned None for 'response'")
+
+    if isinstance(text, dict):
+        # Guard: a LangChain AIMessage object serialised as a dict has a "content"
+        # key (and "type": "ai") — it is NOT the roadmap payload itself.
+        # Extract the string content and fall through to normal string parsing.
+        if "content" in text and "type" in text:
+            logger.warning(
+                "[parse_roadmap] received a LangChain message dict; extracting 'content' key"
+            )
+            text = text["content"]
+            # Fall through to string parsing below
+        else:
+            # A genuine roadmap dict — return as-is
+            logger.debug("[parse_roadmap] text is already a dict, skipping regex")
+            return text
+
+    if isinstance(text, list):
+        logger.debug("[parse_roadmap] text is already a list, skipping regex")
+        return text
+
+    # text is a string — strip markdown fences and parse
     clean = re.sub(r"```json|```", "", text).strip()
     clean = re.sub(r"'(\d+)'", r"\1", clean)
 
-    roadmap = json.loads(clean)
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError as e:
+        logger.error("[parse_roadmap] JSON parse failed: %s | raw snippet: %.200s", e, clean)
+        raise ValueError(f"Failed to parse roadmap JSON: {e}") from e
+
+
+@app.route("/generate_roadmap", methods=["POST"])
+def generate_roadmap():
+    data = request.json
+    user_id = get_user_from_token()
+    print("USER_ID:", user_id)
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    query = data.get("query")
+    if not query:
+        return jsonify({"error": "'query' is required"}), 400
+    startup_idea = data.get("startup_idea", "")
+
+    try:
+        ai = requests.get(
+            f"{AI_Backend_URL}/roadmap/",
+            params={"query": query},
+            timeout=60,
+        )
+        ai.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error("[generate_roadmap] AI backend request failed: %s", e)
+        return jsonify({"error": "Failed to reach AI backend"}), 502
+
+    raw = ai.json()
+    text = raw.get("response")
+    logger.debug("[generate_roadmap] type(text)=%s", type(text).__name__)
+
+    try:
+        roadmap = _parse_roadmap_text(text)
+    except ValueError as e:
+        logger.error("[generate_roadmap] %s", e)
+        return jsonify({"error": str(e)}), 500
 
     conn = get_db_connection()
     cur = conn.cursor()
@@ -358,9 +585,132 @@ def generate_roadmap():
     cur.close()
     conn.close()
 
-    return jsonify({
-        "roadmap": roadmap
-    }), 200
+    return jsonify({"roadmap": roadmap}), 200
+
+
+@app.route("/startup/idea", methods=["PUT"])
+def update_startup_idea():
+    user_id = get_user_from_token()
+    if not user_id:
+         return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.json
+    new_idea = data.get("new_idea")
+    if not new_idea:
+        return jsonify({"error": "No idea provided"}), 400
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT age, gender, category, location, funding_status 
+        FROM startup_forms 
+        WHERE user_id = %s 
+        ORDER BY id DESC LIMIT 1
+    """, (user_id,))
+    form_data = cur.fetchone()
+    
+    if form_data:
+        cur.execute("""
+            UPDATE startup_forms 
+            SET startup_idea = %s 
+            WHERE user_id = %s AND id = (
+                SELECT max(id) FROM startup_forms WHERE user_id = %s
+            )
+        """, (new_idea, user_id, user_id))
+        conn.commit()
+
+        age, gender, category, location, funding_status = form_data
+        query = f"I am {age} years old {gender}. I want to build {new_idea}. My category is {category}, located in {location}. Funding status: {funding_status}."
+    else:
+        cur.close()
+        conn.close()
+        return jsonify({"error": "No startup form found for user"}), 404
+
+    try:
+        ai = requests.get(
+            f"{AI_Backend_URL}/roadmap/",
+            params={"query": query},
+            timeout=80,
+        )
+        raw = ai.json()
+        text = raw.get("response")
+        logger.debug("[update_startup_idea] type(text)=%s", type(text).__name__)
+        roadmap = _parse_roadmap_text(text)
+
+        cur.execute("""
+            INSERT INTO roadmaps (user_id, startup_idea, roadmap)
+            VALUES (%s, %s, %s)
+            RETURNING id
+        """, (user_id, new_idea, json.dumps(roadmap)))
+
+        # Clear old progress since it's a new roadmap
+        cur.execute("DELETE FROM roadmap_progress WHERE user_id = %s", (user_id,))
+        conn.commit()
+    except ValueError as e:
+        logger.error("[update_startup_idea] Parse error: %s", e)
+        cur.close()
+        conn.close()
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        logger.error("[update_startup_idea] Unexpected error: %s", e)
+        cur.close()
+        conn.close()
+        return jsonify({"error": "Failed to regenerate roadmap"}), 500
+
+    cur.close()
+    conn.close()
+    return jsonify({"message": "Startup idea updated", "roadmap": roadmap}), 200
+
+
+@app.route("/roadmap/progress", methods=["GET"])
+def get_roadmap_progress():
+    user_id = get_user_from_token()
+    if not user_id:
+         return jsonify({"error": "Unauthorized"}), 401
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT completed_steps, current_phase_index 
+        FROM roadmap_progress 
+        WHERE user_id = %s
+    """, (user_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if row:
+        return jsonify({"completedSteps": row[0], "currentPhaseIndex": row[1]}), 200
+    return jsonify({"completedSteps": [], "currentPhaseIndex": 0}), 200
+
+
+@app.route("/roadmap/progress", methods=["POST"])
+def update_roadmap_progress():
+    user_id = get_user_from_token()
+    if not user_id:
+         return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    completed_steps = data.get("completedSteps", [])
+    current_phase_index = data.get("currentPhaseIndex", 0)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO roadmap_progress (user_id, completed_steps, current_phase_index)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (user_id) 
+        DO UPDATE SET 
+            completed_steps = EXCLUDED.completed_steps,
+            current_phase_index = EXCLUDED.current_phase_index,
+            last_updated = CURRENT_TIMESTAMP
+    """, (user_id, json.dumps(completed_steps), current_phase_index))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"message": "Progress saved"}), 200
 
 
 @app.route("/user-profile", methods=["GET"])
@@ -388,4 +738,5 @@ def get_user_profile():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # For local development only — production uses gunicorn via Dockerfile CMD
+    app.run(debug=False, host="0.0.0.0", port=5000)

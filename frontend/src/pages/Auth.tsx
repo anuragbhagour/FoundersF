@@ -7,6 +7,8 @@ import { Eye, EyeOff, ArrowLeft, Mail, Lock, User } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import axios from "axios";
 
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
 const Auth = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -20,53 +22,52 @@ const Auth = () => {
     email: "",
     password: "",
   });
-//i have made changes in the handlesubmit function and added backend api's to it 
- const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setIsLoading(true);
 
-  try {
-    const url =
-      mode === "login"
-        ? "http://localhost:5000/login"
-        : "http://localhost:5000/signup";
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
 
-    const payload =
-      mode === "login"
-        ? {
+    try {
+      const url =
+        mode === "login"
+          ? `${API_BASE}/login`
+          : `${API_BASE}/signup`;
+
+      const payload =
+        mode === "login"
+          ? {
             email: formData.email,
             password: formData.password,
           }
-        : {
+          : {
             name: formData.name,
             email: formData.email,
             password: formData.password,
           };
 
-    const res = await axios.post(url, payload);
+      const res = await axios.post(url, payload);
 
-    sessionStorage.clear();
+      sessionStorage.clear();
 
-    if (mode === "login" && res.data.token) {
-      localStorage.setItem("token", res.data.token);
-    
-      window.dispatchEvent(new Event("auth-change"));
+      if (mode === "signup") {
+        alert("Great!, Now sign in with the new credentials and let's begin our journey.");
+        setMode("login");
+        setFormData({ ...formData, password: "" }); // Clear password for security
+      } else {
+        if (res.data.token) {
+          localStorage.setItem("token", res.data.token);
+        }
+        window.dispatchEvent(new Event("auth-change"));
+        navigate("/dashboard");
+      }
 
-      navigate("/dashboard");
+    } catch (error) {
+      console.error("Auth error:", error);
+      alert("Invalid credentials or server error");
+    } finally {
+      setIsLoading(false);
     }
-
-
-    if (mode === "signup") {
-      navigate("/auth?mode=login");
-    }
-
-  } catch (error) {
-    console.error("Auth error:", error);
-    alert("Invalid credentials or server error");
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
 
 
   return (
@@ -185,8 +186,8 @@ const Auth = () => {
               {isLoading
                 ? "Please wait..."
                 : mode === "login"
-                ? "Sign In"
-                : "Create Account"}
+                  ? "Sign In"
+                  : "Create Account"}
             </Button>
           </form>
 

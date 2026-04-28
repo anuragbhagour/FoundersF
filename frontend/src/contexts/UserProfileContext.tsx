@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
 export interface UserProfile {
   id: string;
   displayName: string;
@@ -50,11 +52,11 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile>(defaultProfile);
   const [isLoading, setIsLoading] = useState(true);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
-  const [stats] = useState({
+  const [stats, setStats] = useState({
     aiInteractions: 12,
     savedSchemes: 5,
     savedResources: 8,
-    roadmapProgress: 35,
+    roadmapProgress: 0,
   });
 
   // Fetch user profile from backend on mount
@@ -67,7 +69,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const response = await fetch('http://localhost:5000/user-profile', {
+        const response = await fetch(`${API_BASE}/user-profile`, {
           headers: { 'Authorization': token }
         });
 
@@ -77,7 +79,35 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         } else {
           localStorage.removeItem('token');
           window.dispatchEvent(new Event('auth-change'));
+          return;
         }
+
+        // Fetch roadmap progress stats dynamically
+        try {
+          const [roadmapRes, progressRes] = await Promise.all([
+            fetch(`${API_BASE}/my-roadmap`, { headers: { 'Authorization': token } }),
+            fetch(`${API_BASE}/roadmap/progress`, { headers: { 'Authorization': token } })
+          ]);
+
+          if (roadmapRes.ok && progressRes.ok) {
+            const rData = await roadmapRes.json();
+            const pData = await progressRes.json();
+
+            let totalSteps = 0;
+            let percentDone = 0;
+
+            if (rData.roadmap && rData.roadmap.length > 0) {
+              totalSteps = rData.roadmap.reduce((acc: number, phase: any) => acc + (phase.tasks?.length || 0), 0);
+              if (totalSteps > 0 && pData.completedSteps) {
+                percentDone = Math.round((pData.completedSteps.length / totalSteps) * 100);
+              }
+            }
+            setStats(prev => ({ ...prev, roadmapProgress: percentDone }));
+          }
+        } catch (err) {
+          console.error("Failed to sync roadmap progress:", err);
+        }
+
       } catch (error) {
         console.error('Failed to fetch user profile:', error);
         localStorage.removeItem('token');
